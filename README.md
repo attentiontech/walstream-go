@@ -34,27 +34,68 @@ c := client.New(
 Connection names reference server-side connection credentials managed separately from pipeline specs. The source connection refers to a named PostgreSQL connection, and the destination connection refers to a named Kafka connection.
 
 ```go
-result, created, err := c.Apply(ctx, walstream.PipelineSpec{
-    Name: "my-postgres",
-    Source: walstream.SourceConfig{
+result, created, err := c.Pipelines.Apply(ctx, types.PipelineSpec{
+    Name: "user_changes",
+    Source: types.SourceConfig{
         Connection: "my-postgres",
-        Tables: []walstream.Table{
+        Tables: []types.Table{
             {Schema: "public", Name: "users"},
             {Schema: "public", Name: "orders"},
         },
     },
-    Destination: walstream.DestinationConfig{
+    Destination: types.DestinationConfig{
         Connection: "my-kafka",
-        Kafka: walstream.KafkaDestinationConfig{
+        Kafka: types.KafkaDestinationConfig{
             TopicPrefix: "myapp_",
-            Initial: walstream.KafkaTopicInitial{
+            Initial: types.KafkaTopicInitial{
                 Partitions:    3,
-                CleanupPolicy: walstream.CleanupPolicyDelete,
+                CleanupPolicy: types.CleanupPolicyDelete,
             },
         },
     },
-    DesiredStatus: walstream.DesiredStatusRunning,
+    DesiredStatus: types.DesiredStatusRunning,
 })
+```
+
+### List Pipelines
+
+```go
+pipelines, err := c.Pipelines.List(ctx)
+for _, p := range pipelines {
+    fmt.Printf("%s: %s\n", p.Name, p.Status)
+}
+```
+
+### Get a Pipeline
+
+```go
+state, err := c.Pipelines.Get(ctx, "user_changes")
+fmt.Printf("status: %s\n", state.Status)
+if state.LastError != nil {
+    fmt.Printf("last error: %s\n", *state.LastError)
+}
+```
+
+### Check Pipeline Health
+
+```go
+status, err := c.Pipelines.Healthz(ctx, "user_changes")
+fmt.Printf("health: %s\n", status)
+```
+
+### Stop a Pipeline
+
+```go
+state, err := c.Pipelines.Get(ctx, "user_changes")
+state.DesiredStatus = types.DesiredStatusStopped
+_, _, err = c.Pipelines.Apply(ctx, state.PipelineSpec)
+```
+
+### Destroy a Pipeline
+
+```go
+result, err := c.Pipelines.Destroy(ctx, "user_changes")
+fmt.Printf("status: %s\n", result.Status)
 ```
 
 ## Core Types
@@ -64,14 +105,6 @@ result, created, err := c.Apply(ctx, walstream.PipelineSpec{
 - **SourceConfig**: PostgreSQL connection and table specifications
 - **DestinationConfig**: Kafka configuration and topic settings
 - **KafkaTopicOverride**: Per-table Kafka topic customization
-
-## API Endpoints
-
-The library provides types for API responses:
-
-- **ApplyResponse**: Result of applying/creating a pipeline configuration
-- **DestroyResponse**: Result of destroying a pipeline
-- **Response**: Base response envelope with optional messages
 
 ## Status Constants
 
@@ -93,11 +126,6 @@ The library provides types for API responses:
 
 - `CleanupPolicyDelete`: Delete old log segments after retention period
 - `CleanupPolicyCompact`: Keep the latest value for each key
-
-### Message Levels
-
-- `MessageLevelInfo`: Informational message
-- `MessageLevelWarning`: Warning message
 
 ## License
 
