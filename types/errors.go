@@ -1,4 +1,4 @@
-package walstream
+package types
 
 import "errors"
 

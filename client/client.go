@@ -1,7 +1,6 @@
 package client
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,7 +9,7 @@ import (
 	"net/http"
 	"os"
 
-	walstream "github.com/attentiontech/walstream-go"
+	"github.com/attentiontech/walstream-go/types"
 )
 
 // ErrUnauthorized is returned when the server rejects a request due to
@@ -20,11 +19,20 @@ var ErrUnauthorized = errors.New("unauthorized")
 // DefaultServerURL is the default walstream server URL.
 const DefaultServerURL = "http://localhost:9795"
 
+// Requester creates and executes HTTP requests pre-configured with
+// base URL and authentication.
+type Requester interface {
+	NewRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error)
+	Do(req *http.Request) (*http.Response, error)
+}
+
 // Client is a Go client for the walstream API.
 type Client struct {
 	baseURL     string
 	httpClient  *http.Client
 	bearerToken string
+
+	Pipelines *PipelineService
 }
 
 // Option configures a Client.
@@ -66,11 +74,14 @@ func New(opts ...Option) *Client {
 	for _, opt := range opts {
 		opt(c)
 	}
+	c.Pipelines = NewPipelineService(c)
 	return c
 }
 
-func (c *Client) newRequest(ctx context.Context, method, url string, body io.Reader) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, method, url, body)
+// NewRequest creates an HTTP request with the base URL prepended and
+// authentication headers set.
+func (c *Client) NewRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
 	if err != nil {
 		return nil, err
 	}
@@ -80,144 +91,9 @@ func (c *Client) newRequest(ctx context.Context, method, url string, body io.Rea
 	return req, nil
 }
 
-// Apply creates or updates a pipeline. Returns the apply response and whether
-// it was newly created (true on 201, false on 200).
-func (c *Client) Apply(ctx context.Context, spec walstream.PipelineSpec) (*walstream.ApplyResponse, bool, error) {
-	body, err := json.Marshal(spec)
-	if err != nil {
-		return nil, false, fmt.Errorf("failed to marshal spec: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/api/v1/pipelines/%s", c.baseURL, spec.Name)
-	req, err := c.newRequest(ctx, http.MethodPut, url, bytes.NewReader(body))
-	if err != nil {
-		return nil, false, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, false, err
-	}
-	defer resp.Body.Close()
-
-	if err := checkError(resp); err != nil {
-		return nil, false, err
-	}
-
-	var result walstream.ApplyResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, false, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return &result, resp.StatusCode == http.StatusCreated, nil
-}
-
-// Destroy deletes a pipeline by name.
-func (c *Client) Destroy(ctx context.Context, name string) (*walstream.DestroyResponse, error) {
-	url := fmt.Sprintf("%s/api/v1/pipelines/%s", c.baseURL, name)
-	req, err := c.newRequest(ctx, http.MethodDelete, url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if err := checkError(resp); err != nil {
-		return nil, err
-	}
-
-	var result walstream.DestroyResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return &result, nil
-}
-
-// List returns all pipelines with their current state.
-func (c *Client) List(ctx context.Context) ([]walstream.PipelineState, error) {
-	url := fmt.Sprintf("%s/api/v1/pipelines", c.baseURL)
-	req, err := c.newRequest(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if err := checkError(resp); err != nil {
-		return nil, err
-	}
-
-	var states []walstream.PipelineState
-	if err := json.NewDecoder(resp.Body).Decode(&states); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return states, nil
-}
-
-// Get returns a single pipeline's state.
-func (c *Client) Get(ctx context.Context, name string) (*walstream.PipelineState, error) {
-	url := fmt.Sprintf("%s/api/v1/pipelines/%s", c.baseURL, name)
-	req, err := c.newRequest(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if err := checkError(resp); err != nil {
-		return nil, err
-	}
-
-	var state walstream.PipelineState
-	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return &state, nil
-}
-
-// Healthz returns the effective status of a pipeline.
-func (c *Client) Healthz(ctx context.Context, name string) (walstream.EffectiveStatus, error) {
-	url := fmt.Sprintf("%s/api/v1/pipelines/%s/healthz", c.baseURL, name)
-	req, err := c.newRequest(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return "", err
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	var result struct {
-		Status string `json:"status"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	// 503 is expected for non-running pipelines, not an error
-	if resp.StatusCode == http.StatusNotFound {
-		return "", fmt.Errorf("pipeline %q: %w", name, walstream.ErrPipelineNotFound)
-	}
-
-	return walstream.EffectiveStatus(result.Status), nil
+// Do executes an HTTP request.
+func (c *Client) Do(req *http.Request) (*http.Response, error) {
+	return c.httpClient.Do(req)
 }
 
 func checkError(resp *http.Response) error {
@@ -237,9 +113,9 @@ func checkError(resp *http.Response) error {
 	if json.Unmarshal(body, &apiErr) == nil && apiErr.Error != "" {
 		switch resp.StatusCode {
 		case http.StatusNotFound:
-			return fmt.Errorf("%s: %w", apiErr.Error, walstream.ErrPipelineNotFound)
+			return fmt.Errorf("%s: %w", apiErr.Error, types.ErrPipelineNotFound)
 		case http.StatusBadRequest:
-			return fmt.Errorf("%s: %w", apiErr.Error, walstream.ErrValidation)
+			return fmt.Errorf("%s: %w", apiErr.Error, types.ErrValidation)
 		default:
 			return fmt.Errorf("server error: %s", apiErr.Error)
 		}
