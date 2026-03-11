@@ -37,4 +37,5 @@ type ApplyResponse struct {
 	Response
 	types.PipelineState
 	Changes []Change `json:"changes"`
+	Created bool     `json:"-"`
 }

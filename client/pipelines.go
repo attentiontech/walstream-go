@@ -20,36 +20,37 @@ func NewPipelineService(r Requester) *PipelineService {
 	return &PipelineService{r: r}
 }
 
-// Apply creates or updates a pipeline. Returns the apply response and whether
-// it was newly created (true on 201, false on 200).
-func (s *PipelineService) Apply(ctx context.Context, spec types.PipelineSpec) (*ApplyResponse, bool, error) {
+// Apply creates or updates a pipeline. The response includes a Created field
+// indicating whether the pipeline was newly created (HTTP 201) or updated (HTTP 200).
+func (s *PipelineService) Apply(ctx context.Context, spec types.PipelineSpec) (*ApplyResponse, error) {
 	body, err := json.Marshal(spec)
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to marshal spec: %w", err)
+		return nil, fmt.Errorf("failed to marshal spec: %w", err)
 	}
 
 	req, err := s.r.NewRequest(ctx, http.MethodPut, "/api/v1/pipelines/"+spec.Name, bytes.NewReader(body))
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := s.r.Do(req)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if err := checkError(resp); err != nil {
-		return nil, false, err
+		return nil, err
 	}
 
 	var result ApplyResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, false, fmt.Errorf("failed to decode response: %w", err)
+		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	return &result, resp.StatusCode == http.StatusCreated, nil
+	result.Created = resp.StatusCode == http.StatusCreated
+	return &result, nil
 }
 
 // Destroy deletes a pipeline by name.
