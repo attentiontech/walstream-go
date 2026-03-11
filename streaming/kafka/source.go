@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"time"
 
 	"github.com/attentiontech/walstream-go/streaming"
 	stypes "github.com/attentiontech/walstream-go/streaming/types"
 	segkafka "github.com/segmentio/kafka-go"
-	"go.uber.org/zap"
 )
 
 // KafkaTopicSourceConfig configures a KafkaTopicSource.
@@ -20,7 +21,7 @@ type KafkaTopicSourceConfig struct {
 	Topics      []string
 	Group       string
 	Handler     streaming.ChangeHandler
-	Logger      *zap.Logger
+	Logger      *slog.Logger
 }
 
 // KafkaTopicSource consumes walstream change events from Kafka topics.
@@ -28,7 +29,7 @@ type KafkaTopicSourceConfig struct {
 // subscribed to all topics via the same consumer group.
 type KafkaTopicSource struct {
 	config KafkaTopicSourceConfig
-	logger *zap.Logger
+	logger *slog.Logger
 	reader *segkafka.Reader
 }
 
@@ -49,9 +50,9 @@ func NewKafkaTopicSource(config KafkaTopicSourceConfig) (*KafkaTopicSource, erro
 
 	logger := config.Logger
 	if logger == nil {
-		logger = zap.NewNop()
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	logger = logger.Named("kafka_topic_source")
+	logger = logger.With("component", "kafka_topic_source")
 
 	dialer := config.KafkaConfig.Dialer()
 
@@ -89,7 +90,7 @@ func NewKafkaTopicSource(config KafkaTopicSourceConfig) (*KafkaTopicSource, erro
 // Consume starts consuming from all topics.
 // It blocks until the context is cancelled.
 func (s *KafkaTopicSource) Consume(ctx context.Context) error {
-	s.logger.Info("starting consumer", zap.Strings("topics", s.config.Topics))
+	s.logger.Info("starting consumer", "topics", s.config.Topics)
 	defer s.logger.Info("consumer stopped")
 
 	for {
@@ -104,9 +105,9 @@ func (s *KafkaTopicSource) Consume(ctx context.Context) error {
 		var event stypes.ChangeEvent
 		if err := json.Unmarshal(msg.Value, &event); err != nil {
 			s.logger.Error("failed to unmarshal change event",
-				zap.String("topic.name", msg.Topic),
-				zap.Int64("offset", msg.Offset),
-				zap.Error(err))
+				"topic.name", msg.Topic,
+				"offset", msg.Offset,
+				"error", err)
 			continue
 		}
 
